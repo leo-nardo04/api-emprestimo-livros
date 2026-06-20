@@ -3,10 +3,10 @@ const express = require("express");
 const pool = require("./database"); // O arquivo de conexão que criamos antes
 require("dotenv").config();
 
+const app = express();
+
 const cors = require("cors");
 app.use(cors()); // Libera o acesso para qualquer origem (front-end)
-
-const app = express();
 
 // Middleware para permitir que o Express entenda requisições no formato JSON
 app.use(express.json());
