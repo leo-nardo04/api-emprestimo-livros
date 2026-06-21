@@ -258,6 +258,126 @@ app.post("/login", async (req, res) => {
   }
 });
 
+// ==========================================
+// ROTA: Pegar um livro emprestado (PUT)
+// ==========================================
+app.put("/livros/:id/emprestar", async (req, res) => {
+  try {
+    const { id } = req.params; // ID do livro enviado na URL
+    const { usuario_id } = req.body; // ID do usuário que está pegando o livro
+
+    // Validação inicial: precisamos saber quem está pegando o livro
+    if (!usuario_id) {
+      return res.status(400).json({
+        error: "O campo 'usuario_id' é obrigatório para realizar o empréstimo.",
+      });
+    }
+
+    // 1. VERIFICAÇÃO: Busca o status atual do livro no banco
+    const livroCheck = await pool.query(
+      "SELECT status FROM livro WHERE id = $1",
+      [id],
+    );
+
+    // Se o livro não existir no banco
+    if (livroCheck.rows.length === 0) {
+      return res.status(404).json({
+        error: `Livro com o ID ${id} não foi encontrado.`,
+      });
+    }
+
+    // Se o status já for 'emprestado', impede o novo empréstimo imediatamente
+    if (livroCheck.rows[0].status === "emprestado") {
+      return res.status(400).json({
+        error: "Este livro já está emprestado para outra pessoa.",
+      });
+    }
+
+    // 2. AÇÃO: Se estiver disponível, atualiza o status, grava o ID do usuário e a data atual (NOW())
+    const queryTxt = `
+      UPDATE livro 
+      SET status = 'emprestado', 
+          usuario_emprestimo = $1, 
+          data_emprestimo = NOW() 
+      WHERE id = $2 
+      RETURNING *
+    `;
+
+    const resultado = await pool.query(queryTxt, [usuario_id, id]);
+
+    // Retorna a resposta de sucesso com os dados atualizados do livro
+    res.json({
+      status: "Sucesso!",
+      mensagem: `O livro "${resultado.rows[0].titulo}" foi emprestado com sucesso.`,
+      livro: resultado.rows[0],
+    });
+  } catch (err) {
+    console.error(
+      `Erro ao processar empréstimo do livro ${req.params.id}:`,
+      err,
+    );
+    res.status(500).json({
+      error: "Erro interno do servidor ao tentar processar o empréstimo.",
+    });
+  }
+});
+
+// ==========================================
+// ROTA: Devolver um livro (PUT)
+// ==========================================
+app.put("/livros/:id/devolver", async (req, res) => {
+  try {
+    const { id } = req.params; // ID do livro enviado na URL
+
+    // 1. VERIFICAÇÃO: Busca o status atual do livro no banco
+    const libroCheck = await pool.query(
+      "SELECT status FROM livro WHERE id = $1",
+      [id],
+    );
+
+    // Se o livro não existir no banco
+    if (libroCheck.rows.length === 0) {
+      return res.status(404).json({
+        error: `Livro com o ID ${id} não foi encontrado.`,
+      });
+    }
+
+    // Se o status já for 'disponivel', impede a devolução
+    if (libroCheck.rows[0].status === "disponivel") {
+      return res.status(400).json({
+        error: "Este livro já está disponível na biblioteca.",
+      });
+    }
+
+    // 2. AÇÃO: Atualiza o status para 'disponivel' e limpa os campos de empréstimo (limpa com NULL)
+    const queryTxt = `
+      UPDATE livro 
+      SET status = 'disponivel', 
+          usuario_emprestimo = NULL, 
+          data_emprestimo = NULL 
+      WHERE id = $1 
+      RETURNING *
+    `;
+
+    const resultado = await pool.query(queryTxt, [id]);
+
+    // Retorna a resposta de sucesso com os dados limpos do livro
+    res.json({
+      status: "Sucesso!",
+      mensagem: `O livro "${resultado.rows[0].titulo}" foi devolvido com sucesso.`,
+      livro: resultado.rows[0],
+    });
+  } catch (err) {
+    console.error(
+      `Erro ao processar devolução do livro ${req.params.id}:`,
+      err,
+    );
+    res.status(500).json({
+      error: "Erro interno do servidor ao tentar processar a devolução.",
+    });
+  }
+});
+
 // Definir a porta do servidor
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
