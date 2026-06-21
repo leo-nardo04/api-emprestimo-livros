@@ -323,33 +323,49 @@ app.put("/livros/:id/emprestar", async (req, res) => {
 });
 
 // ==========================================
-// ROTA: Devolver um livro (PUT)
+// ROTA: Devolver um livro (PUT) com Validação de Usuário
 // ==========================================
 app.put("/livros/:id/devolver", async (req, res) => {
   try {
-    const { id } = req.params; // ID do livro enviado na URL
+    const { id } = req.params;
+    const { usuario_id } = req.body; // Recebe quem está tentando fazer a devolução
 
-    // 1. VERIFICAÇÃO: Busca o status atual do livro no banco
-    const libroCheck = await pool.query(
-      "SELECT status FROM livro WHERE id = $1",
+    if (!usuario_id) {
+      return res
+        .status(400)
+        .json({
+          error: "O 'usuario_id' é obrigatório para processar a devolução.",
+        });
+    }
+
+    // 1. Busca o livro e verifica quem está em posse dele
+    const livroCheck = await pool.query(
+      "SELECT status, usuario_emprestimo FROM livro WHERE id = $1",
       [id],
     );
 
-    // Se o livro não existir no banco
-    if (libroCheck.rows.length === 0) {
-      return res.status(404).json({
-        error: `Livro com o ID ${id} não foi encontrado.`,
+    if (livroCheck.rows.length === 0) {
+      return res
+        .status(404)
+        .json({ error: `Livro com o ID ${id} não foi encontrado.` });
+    }
+
+    if (livroCheck.rows[0].status === "disponivel") {
+      return res
+        .status(400)
+        .json({ error: "Este livro já está disponível na biblioteca." });
+    }
+
+    // TRAVA DE SEGURANÇA NO BANCO:
+    // Se o ID de quem está mandando a requisição for diferente do ID registrado no empréstimo
+    if (livroCheck.rows[0].usuario_emprestimo !== parseInt(usuario_id)) {
+      return res.status(403).json({
+        error:
+          "Você não tem permissão para devolver este livro, pois ele está emprestado para outro usuário.",
       });
     }
 
-    // Se o status já for 'disponivel', impede a devolução
-    if (libroCheck.rows[0].status === "disponivel") {
-      return res.status(400).json({
-        error: "Este livro já está disponível na biblioteca.",
-      });
-    }
-
-    // 2. AÇÃO: Atualiza o status para 'disponivel' e limpa os campos de empréstimo (limpa com NULL)
+    // 2. Se passou na validação, limpa os campos normalmente
     const queryTxt = `
       UPDATE livro 
       SET status = 'disponivel', 
@@ -361,7 +377,6 @@ app.put("/livros/:id/devolver", async (req, res) => {
 
     const resultado = await pool.query(queryTxt, [id]);
 
-    // Retorna a resposta de sucesso com os dados limpos do livro
     res.json({
       status: "Sucesso!",
       mensagem: `O livro "${resultado.rows[0].titulo}" foi devolvido com sucesso.`,
@@ -372,9 +387,11 @@ app.put("/livros/:id/devolver", async (req, res) => {
       `Erro ao processar devolução do livro ${req.params.id}:`,
       err,
     );
-    res.status(500).json({
-      error: "Erro interno do servidor ao tentar processar a devolução.",
-    });
+    res
+      .status(500)
+      .json({
+        error: "Erro interno do servidor ao tentar processar a devolução.",
+      });
   }
 });
 
