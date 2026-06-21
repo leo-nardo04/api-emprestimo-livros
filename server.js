@@ -4,6 +4,7 @@ const pool = require("./database"); // O arquivo de conexão que criamos antes
 require("dotenv").config();
 
 const app = express();
+const bcrypt = require("bcrypt");
 
 const cors = require("cors");
 app.use(cors()); // Libera o acesso para qualquer origem (front-end)
@@ -167,6 +168,93 @@ app.post("/livros", async (req, res) => {
     res.status(500).json({
       error: "Erro interno do servidor ao tentar cadastrar o livro.",
     });
+  }
+});
+
+// ==========================================
+// ROTA: Cadastrar um novo usuário com senha segura
+// ==========================================
+app.post("/usuarios", async (req, res) => {
+  try {
+    const { nome, email, senha } = req.body;
+
+    if (!nome || !email || !senha) {
+      return res
+        .status(400)
+        .json({ error: "Todos os campos são obrigatórios." });
+    }
+
+    // Criptografa a senha gerando um "hash"
+    const saltRounds = 10;
+    const senhaCriptografada = await bcrypt.hash(senha, saltRounds);
+
+    // Insere no banco de dados
+    const queryTxt =
+      "INSERT INTO usuario (nome, email, senha) VALUES ($1, $2, $3) RETURNING id, nome, email";
+    const resultado = await pool.query(queryTxt, [
+      nome,
+      email,
+      senhaCriptografada,
+    ]);
+
+    res.status(201).json({
+      status: "Sucesso!",
+      usuario: resultado.rows[0],
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Erro ao cadastrar usuário." });
+  }
+});
+
+// ==========================================
+// ROTA: Autenticação de Login
+// ==========================================
+app.post("/login", async (req, res) => {
+  try {
+    const { email, senha } = req.body;
+
+    if (!email || !senha) {
+      return res
+        .status(400)
+        .json({ error: "E-mail e senha são obrigatórios." });
+    }
+
+    // Busca o usuário pelo e-mail
+    const resultado = await pool.query(
+      "SELECT * FROM usuario WHERE email = $1",
+      [email],
+    );
+
+    // Se não achar o e-mail
+    if (resultado.rows.length === 0) {
+      return res.status(401).json({ error: "E-mail ou senha incorretos." });
+    }
+
+    const usuario = resultado.rows[0];
+
+    // Compara a senha digitada com a senha criptografada do banco
+    const senhaBatem = await bcrypt.compare(senha, usuario.senha);
+
+    if (!senhaBatem) {
+      return res.status(401).json({ error: "E-mail ou senha incorretos." });
+    }
+
+    // Login feito com sucesso! Retorna os dados do usuário (menos a senha)
+    res.json({
+      status: "Sucesso!",
+      mensagem: "Login realizado com sucesso.",
+      usuario: {
+        id: usuario.id,
+        nome: usuario.nome,
+        email: usuario.email,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res
+      .status(500)
+      .json({ error: "Erro interno no servidor ao tentar logar." });
   }
 });
 
