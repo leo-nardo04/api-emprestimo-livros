@@ -35,11 +35,22 @@ app.get("/", async (req, res) => {
 
 app.get("/livros", async (req, res) => {
   try {
-    // Nota: 'livro' em minúsculo para bater com o banco
-    const resultado = await pool.query(
-      "SELECT id, titulo, autor,foto_url, status FROM livro ORDER BY id ASC",
-    );
+    // O LEFT JOIN busca o nome da tabela usuario associado ao usuario_emprestimo, se existir
+    const queryTxt = `
+      SELECT 
+        l.id, 
+        l.titulo, 
+        l.autor, 
+        l.foto_url, 
+        l.status, 
+        l.usuario_emprestimo,
+        u.nome AS nome_emprestimo
+      FROM livro l
+      LEFT JOIN usuario u ON l.usuario_emprestimo = u.id
+      ORDER BY l.id ASC
+    `;
 
+    const resultado = await pool.query(queryTxt);
     res.json(resultado.rows);
   } catch (err) {
     console.error("Erro ao buscar livros:", err);
@@ -331,11 +342,9 @@ app.put("/livros/:id/devolver", async (req, res) => {
     const { usuario_id } = req.body; // Recebe quem está tentando fazer a devolução
 
     if (!usuario_id) {
-      return res
-        .status(400)
-        .json({
-          error: "O 'usuario_id' é obrigatório para processar a devolução.",
-        });
+      return res.status(400).json({
+        error: "O 'usuario_id' é obrigatório para processar a devolução.",
+      });
     }
 
     // 1. Busca o livro e verifica quem está em posse dele
@@ -387,11 +396,9 @@ app.put("/livros/:id/devolver", async (req, res) => {
       `Erro ao processar devolução do livro ${req.params.id}:`,
       err,
     );
-    res
-      .status(500)
-      .json({
-        error: "Erro interno do servidor ao tentar processar a devolução.",
-      });
+    res.status(500).json({
+      error: "Erro interno do servidor ao tentar processar a devolução.",
+    });
   }
 });
 
