@@ -268,43 +268,63 @@ app.post("/login", async (req, res) => {
       .json({ error: "Erro interno no servidor ao tentar logar." });
   }
 });
-
 // ==========================================
 // ROTA: Pegar um livro emprestado (PUT)
 // ==========================================
 app.put("/livros/:id/emprestar", async (req, res) => {
   try {
-    const { id } = req.params; // ID do livro enviado na URL
-    const { usuario_id } = req.body; // ID do usuário que está pegando o livro
+    const { id } = req.params;
+    const { nome_completo } = req.body; // Recebe o nome digitado no Modal do Front
 
-    // Validação inicial: precisamos saber quem está pegando o livro
-    if (!usuario_id) {
+    if (!nome_completo) {
       return res.status(400).json({
-        error: "O campo 'usuario_id' é obrigatório para realizar o empréstimo.",
+        error: "O nome completo é obrigatório para realizar o empréstimo.",
       });
     }
 
-    // 1. VERIFICAÇÃO: Busca o status atual do livro no banco
+    // 1. VERIFICAÇÃO: Busca o status atual do livro
     const livroCheck = await pool.query(
       "SELECT status FROM livro WHERE id = $1",
       [id],
     );
 
-    // Se o livro não existir no banco
     if (livroCheck.rows.length === 0) {
-      return res.status(404).json({
-        error: `Livro com o ID ${id} não foi encontrado.`,
-      });
+      return res
+        .status(404)
+        .json({ error: `Livro com o ID ${id} não foi encontrado.` });
     }
 
-    // Se o status já for 'emprestado', impede o novo empréstimo imediatamente
     if (livroCheck.rows[0].status === "emprestado") {
-      return res.status(400).json({
-        error: "Este livro já está emprestado para outra pessoa.",
-      });
+      return res
+        .status(400)
+        .json({ error: "Este livro já está emprestado para outra pessoa." });
     }
 
-    // 2. AÇÃO: Se estiver disponível, atualiza o status, grava o ID do usuário e a data atual (NOW())
+    // 2. AÇÃO: Buscamos ou criamos um registro na tabela usuario para esse nome completo,
+    // ou se o seu banco usa uma coluna de texto direta, atualizamos.
+    // Como sua tabela guarda um ID na coluna 'usuario_emprestimo', vamos primeiro descobrir
+    // o ID desse usuário pelo nome ou cadastrá-lo na hora de forma simples:
+    let usuarioId = null;
+    const usuarioCheck = await pool.query(
+      "SELECT id FROM usuario WHERE nome = $1",
+      [nome_completo],
+    );
+
+    if (usuarioCheck.rows.length > 0) {
+      usuarioId = usuarioCheck.rows[0].id;
+    } else {
+      // Se não existir um usuário com esse nome exato, cria um provisório sem senha para fins de histórico
+      const novoUsuario = await pool.query(
+        "INSERT INTO usuario (nome, email, senha) VALUES ($1, $2, 'PROVISORIO') RETURNING id",
+        [
+          nome_completo,
+          `${nome_completo.toLowerCase().replace(/\s+/g, "")}@biblioteca.com`,
+        ],
+      );
+      usuarioId = novoUsuario.rows[0].id;
+    }
+
+    // 3. Executa o UPDATE salvando o ID vinculado ao nome digitado
     const queryTxt = `
       UPDATE livro 
       SET status = 'emprestado', 
@@ -314,9 +334,8 @@ app.put("/livros/:id/emprestar", async (req, res) => {
       RETURNING *
     `;
 
-    const resultado = await pool.query(queryTxt, [usuario_id, id]);
+    const resultado = await pool.query(queryTxt, [usuarioId, id]);
 
-    // Retorna a resposta de sucesso com os dados atualizados do livro
     res.json({
       status: "Sucesso!",
       mensagem: `O livro "${resultado.rows[0].titulo}" foi emprestado com sucesso.`,
@@ -334,22 +353,15 @@ app.put("/livros/:id/emprestar", async (req, res) => {
 });
 
 // ==========================================
-// ROTA: Devolver um livro (PUT) com Validação de Usuário
+// ROTA: Devolver um livro (PUT)
 // ==========================================
 app.put("/livros/:id/devolver", async (req, res) => {
   try {
     const { id } = req.params;
-    const { usuario_id } = req.body; // Recebe quem está tentando fazer a devolução
 
-    if (!usuario_id) {
-      return res.status(400).json({
-        error: "O 'usuario_id' é obrigatório para processar a devolução.",
-      });
-    }
-
-    // 1. Busca o livro e verifica quem está em posse dele
+    // 1. VERIFICAÇÃO: Busca o status atual do livro no banco
     const livroCheck = await pool.query(
-      "SELECT status, usuario_emprestimo FROM livro WHERE id = $1",
+      "SELECT status FROM livro WHERE id = $1",
       [id],
     );
 
@@ -365,16 +377,7 @@ app.put("/livros/:id/devolver", async (req, res) => {
         .json({ error: "Este livro já está disponível na biblioteca." });
     }
 
-    // TRAVA DE SEGURANÇA NO BANCO:
-    // Se o ID de quem está mandando a requisição for diferente do ID registrado no empréstimo
-    if (livroCheck.rows[0].usuario_emprestimo !== parseInt(usuario_id)) {
-      return res.status(403).json({
-        error:
-          "Você não tem permissão para devolver este livro, pois ele está emprestado para outro usuário.",
-      });
-    }
-
-    // 2. Se passou na validação, limpa os campos normalmente
+    // 2. AÇÃO: Removemos a trava de ID de usuário! Qualquer pessoa que acionar a rota limpa os campos.
     const queryTxt = `
       UPDATE livro 
       SET status = 'disponivel', 
