@@ -15,13 +15,13 @@ app.use(express.json());
 // Rota de teste inicial para garantir que o servidor está rodando
 app.get("/", async (req, res) => {
   try {
-    // Faz uma consulta simples para tentar ler a tabela de livros (que está vazia)
-    const resultado = await pool.query("SELECT * FROM LIVRO");
+    // Faz uma consulta simples para tentar ler a tabela de livros
+    const resultado = await pool.query("SELECT * FROM livro");
 
     res.json({
       status: "Sucesso!",
       mensagem: "O servidor Node.js conectou perfeitamente ao Supabase!",
-      total_livros_no_banco: resultado.rows.length, // Deve retornar 0
+      total_livros_no_banco: resultado.rows.length,
     });
   } catch (err) {
     console.error(err);
@@ -33,9 +33,12 @@ app.get("/", async (req, res) => {
   }
 });
 
+// ==========================================
+// ROTA: Buscar todos os livros (GET) - ATUALIZADA
+// ==========================================
 app.get("/livros", async (req, res) => {
   try {
-    // O LEFT JOIN busca o nome da tabela usuario associado ao usuario_emprestimo, se existir
+    // Incluindo os novos campos e trazendo o nome de quem pegou via LEFT JOIN
     const queryTxt = `
       SELECT 
         l.id, 
@@ -44,6 +47,13 @@ app.get("/livros", async (req, res) => {
         l.foto_url, 
         l.status, 
         l.usuario_emprestimo,
+        l.editora,
+        l.ano,
+        l.descricao,
+        l.idioma,
+        l.encadernacao,
+        l.dimensao,
+        l.peso,
         u.nome AS nome_emprestimo
       FROM livro l
       LEFT JOIN usuario u ON l.usuario_emprestimo = u.id
@@ -60,23 +70,43 @@ app.get("/livros", async (req, res) => {
   }
 });
 
+// ==========================================
+// ROTA: Buscar livro por ID (GET) - ATUALIZADA
+// ==========================================
 app.get("/livros/:id", async (req, res) => {
   try {
-    const { id } = req.params; // Pega o ID enviado na URL
+    const { id } = req.params;
 
-    // Faz o SELECT buscando apenas o ID correspondente
-    const resultado = await pool.query("SELECT * FROM livro WHERE id = $1", [
-      id,
-    ]);
+    // Atualizado com LEFT JOIN para que a tela de detalhes receba também o nome de quem pegou
+    const queryTxt = `
+      SELECT 
+        l.id, 
+        l.titulo, 
+        l.autor, 
+        l.foto_url, 
+        l.status, 
+        l.usuario_emprestimo,
+        l.editora,
+        l.ano,
+        l.descricao,
+        l.idioma,
+        l.encadernacao,
+        l.dimensao,
+        l.peso,
+        u.nome AS nome_emprestimo
+      FROM livro l
+      LEFT JOIN usuario u ON l.usuario_emprestimo = u.id
+      WHERE l.id = $1
+    `;
 
-    // Se não encontrar nenhum livro, retorna status 404 (Não Encontrado)
+    const resultado = await pool.query(queryTxt, [id]);
+
     if (resultado.rows.length === 0) {
       return res.status(404).json({
         error: `Livro com o ID ${id} não foi encontrado.`,
       });
     }
 
-    // Retorna apenas o objeto do livro encontrado (a primeira linha do array)
     res.json(resultado.rows[0]);
   } catch (err) {
     console.error(`Erro ao buscar o livro com ID ${req.params.id}:`, err);
@@ -87,26 +117,23 @@ app.get("/livros/:id", async (req, res) => {
 });
 
 // ==========================================
-// ROTA: Deletar um livro pelo ID
+// ROTA: Deletar um livro pelo ID (DELETE)
 // ==========================================
 app.delete("/livros/:id", async (req, res) => {
   try {
-    const { id } = req.params; // Pega o ID enviado na URL
+    const { id } = req.params;
 
-    // Executa o DELETE e usa o RETURNING * para saber se alguma linha foi afetada
     const resultado = await pool.query(
       "DELETE FROM livro WHERE id = $1 RETURNING *",
       [id],
     );
 
-    // Se o array 'rows' vier vazio, significa que o ID não existia no banco
     if (resultado.rows.length === 0) {
       return res.status(404).json({
         error: `Não foi possível deletar: livro com o ID ${id} não foi encontrado.`,
       });
     }
 
-    // Retorna uma mensagem de sucesso confirmando qual livro foi deletado
     res.json({
       status: "Sucesso!",
       mensagem: `O livro "${resultado.rows[0].titulo}" foi deletado com sucesso.`,
@@ -120,17 +147,10 @@ app.delete("/livros/:id", async (req, res) => {
 });
 
 // ==========================================
-// ROTA: Cadastrar um novo livro
+// ROTA: Cadastrar um novo livro (POST) - ATUALIZADA
 // ==========================================
-
-// {
-//   "titulo": "Admirável Mundo Novo",
-//   "autor": "Aldous Huxley",
-//   "foto_url": "https://vcqqsrdbypalxehimeej.supabase.co/storage/v1/object/public/capas-livros/Admiravel_Mundo_Novo.jpg"
-// }
 app.post("/livros", async (req, res) => {
   try {
-    // Pega os dados enviados no corpo (body) da requisição
     const {
       titulo,
       autor,
@@ -138,22 +158,32 @@ app.post("/livros", async (req, res) => {
       status,
       data_emprestimo,
       usuario_emprestimo,
+      editora, // Obrigatório
+      ano, // Obrigatório
+      descricao, // Obrigatório
+      idioma, // Opcional
+      encadernacao, // Opcional
+      dimensao, // Opcional
+      peso, // Opcional
     } = req.body;
 
-    // Validação simples: o título é obrigatório para cadastrar um livro
-    if (!titulo) {
+    // Validação estrita dos requisitos obrigatórios de negócio
+    if (!titulo || !editora || !ano || !descricao) {
       return res.status(400).json({
-        error: "O campo 'titulo' é obrigatório.",
+        error:
+          "Os campos 'titulo', 'editora', 'ano' e 'descricao' são obrigatórios.",
       });
     }
 
-    // Se o status não for enviado, define o padrão como 'disponivel'
     const statusLivro = status || "disponivel";
 
-    // Query para inserir no banco. O RETURNING * nos devolve o livro com o ID gerado automaticamente.
+    // Query expandida para salvar a estrutura completa de metadados
     const queryTxt = `
-      INSERT INTO livro (titulo, autor, foto_url, status, data_emprestimo, usuario_emprestimo)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO livro (
+        titulo, autor, foto_url, status, data_emprestimo, usuario_emprestimo,
+        editora, ano, descricao, idioma, encadernacao, dimensao, peso
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `;
 
@@ -164,11 +194,17 @@ app.post("/livros", async (req, res) => {
       statusLivro,
       data_emprestimo || null,
       usuario_emprestimo || null,
+      editora,
+      ano,
+      descricao,
+      idioma || "Português (pt-BR)", // Valores padrão se vier vazio
+      encadernacao || "Capa Comum",
+      dimensao || null,
+      peso || null,
     ];
 
     const resultado = await pool.query(queryTxt, valores);
 
-    // Retorna o status 201 (Created) e o objeto do livro recém-criado
     res.status(201).json({
       status: "Sucesso!",
       mensagem: "Livro cadastrado com sucesso.",
@@ -183,7 +219,7 @@ app.post("/livros", async (req, res) => {
 });
 
 // ==========================================
-// ROTA: Cadastrar um novo usuário com senha segura
+// ROTA: Cadastrar um novo usuário
 // ==========================================
 app.post("/usuarios", async (req, res) => {
   try {
@@ -195,11 +231,9 @@ app.post("/usuarios", async (req, res) => {
         .json({ error: "Todos os campos são obrigatórios." });
     }
 
-    // Criptografa a senha gerando um "hash"
     const saltRounds = 10;
     const senhaCriptografada = await bcrypt.hash(senha, saltRounds);
 
-    // Insere no banco de dados
     const queryTxt =
       "INSERT INTO usuario (nome, email, senha) VALUES ($1, $2, $3) RETURNING id, nome, email";
     const resultado = await pool.query(queryTxt, [
@@ -231,27 +265,22 @@ app.post("/login", async (req, res) => {
         .json({ error: "E-mail e senha são obrigatórios." });
     }
 
-    // Busca o usuário pelo e-mail
     const resultado = await pool.query(
       "SELECT * FROM usuario WHERE email = $1",
       [email],
     );
 
-    // Se não achar o e-mail
     if (resultado.rows.length === 0) {
       return res.status(401).json({ error: "E-mail ou senha incorretos." });
     }
 
     const usuario = resultado.rows[0];
-
-    // Compara a senha digitada com a senha criptografada do banco
     const senhaBatem = await bcrypt.compare(senha, usuario.senha);
 
     if (!senhaBatem) {
       return res.status(401).json({ error: "E-mail ou senha incorretos." });
     }
 
-    // Login feito com sucesso! Retorna os dados do usuário (menos a senha)
     res.json({
       status: "Sucesso!",
       mensagem: "Login realizado com sucesso.",
@@ -268,13 +297,14 @@ app.post("/login", async (req, res) => {
       .json({ error: "Erro interno no servidor ao tentar logar." });
   }
 });
+
 // ==========================================
 // ROTA: Pegar um livro emprestado (PUT)
 // ==========================================
 app.put("/livros/:id/emprestar", async (req, res) => {
   try {
     const { id } = req.params;
-    const { nome_completo } = req.body; // Recebe o nome digitado no Modal do Front
+    const { nome_completo } = req.body;
 
     if (!nome_completo) {
       return res.status(400).json({
@@ -282,7 +312,6 @@ app.put("/livros/:id/emprestar", async (req, res) => {
       });
     }
 
-    // 1. VERIFICAÇÃO: Busca o status atual do livro
     const livroCheck = await pool.query(
       "SELECT status FROM livro WHERE id = $1",
       [id],
@@ -300,10 +329,6 @@ app.put("/livros/:id/emprestar", async (req, res) => {
         .json({ error: "Este livro já está emprestado para outra pessoa." });
     }
 
-    // 2. AÇÃO: Buscamos ou criamos um registro na tabela usuario para esse nome completo,
-    // ou se o seu banco usa uma coluna de texto direta, atualizamos.
-    // Como sua tabela guarda um ID na coluna 'usuario_emprestimo', vamos primeiro descobrir
-    // o ID desse usuário pelo nome ou cadastrá-lo na hora de forma simples:
     let usuarioId = null;
     const usuarioCheck = await pool.query(
       "SELECT id FROM usuario WHERE nome = $1",
@@ -313,7 +338,6 @@ app.put("/livros/:id/emprestar", async (req, res) => {
     if (usuarioCheck.rows.length > 0) {
       usuarioId = usuarioCheck.rows[0].id;
     } else {
-      // Se não existir um usuário com esse nome exato, cria um provisório sem senha para fins de histórico
       const novoUsuario = await pool.query(
         "INSERT INTO usuario (nome, email, senha) VALUES ($1, $2, 'PROVISORIO') RETURNING id",
         [
@@ -324,7 +348,6 @@ app.put("/livros/:id/emprestar", async (req, res) => {
       usuarioId = novoUsuario.rows[0].id;
     }
 
-    // 3. Executa o UPDATE salvando o ID vinculado ao nome digitado
     const queryTxt = `
       UPDATE livro 
       SET status = 'emprestado', 
@@ -359,7 +382,6 @@ app.put("/livros/:id/devolver", async (req, res) => {
   try {
     const { id } = req.params;
 
-    // 1. VERIFICAÇÃO: Busca o status atual do livro no banco
     const livroCheck = await pool.query(
       "SELECT status FROM livro WHERE id = $1",
       [id],
@@ -377,7 +399,6 @@ app.put("/livros/:id/devolver", async (req, res) => {
         .json({ error: "Este livro já está disponível na biblioteca." });
     }
 
-    // 2. AÇÃO: Removemos a trava de ID de usuário! Qualquer pessoa que acionar a rota limpa os campos.
     const queryTxt = `
       UPDATE livro 
       SET status = 'disponivel', 
